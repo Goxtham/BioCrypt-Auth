@@ -23,11 +23,11 @@ bash
 git clone https://github.com/yourusername/BioCrypt-Auth.git
 cd BioCrypt-Auth
 
-2. Install dependencies
+3. Install dependencies
 bash:README.md
 pip install pillow numpy pycryptodome opencv-python
 
-3. Initialize the database
+4. Initialize the database
 bash
 python app.py
 
