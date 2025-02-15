@@ -319,6 +319,16 @@ class HybridCryptoAuth:
             # Compare faces using DeepFace similarity
             face_match_score = self.compare_faces(stored_face, current_face_image)
             print(f"Face comparison score: {face_match_score}")
+
+            # Always delete temp images, regardless of login success or failure
+            try:
+                os.remove("stored_temp.jpg")
+                os.remove("current_temp.jpg")
+                print("Temporary login images deleted successfully.")
+            except FileNotFoundError:
+                print("Temporary images not found, skipping deletion.")
+            except Exception as e:
+                print(f"Error deleting temporary images: {e}")
             
             if face_match_score == 0:  # If the match score is 0, authentication fails
                 return False, "Face does not match. Please try again."
