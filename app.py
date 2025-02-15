@@ -18,14 +18,15 @@ from tensorflow.keras.applications import VGG16
 from tensorflow.keras.applications.vgg16 import preprocess_input
 from tensorflow.keras.models import Model
 
+
 class HybridCryptoAuth:
     def __init__(self, db_path='auth_system.db'):
         self.key_file = 'encryption_key.bin'
         if os.path.exists(self.key_file):
             with open(self.key_file, 'rb') as f:
-                self.key = f.read()
+                self.key = f.read()[:32]
         else:
-            self.key = get_random_bytes(32)  # AES-256 key
+            self.key = get_random_bytes(32)[:32]  # AES-256 key
             with open(self.key_file, 'wb') as f:
                 f.write(self.key)
         
@@ -315,11 +316,11 @@ class HybridCryptoAuth:
             if stored_face is None:
                 return False, "Could not load stored face image."
 
-            # Compare faces using template matching
+            # Compare faces using DeepFace similarity
             face_match_score = self.compare_faces(stored_face, current_face_image)
             print(f"Face comparison score: {face_match_score}")
             
-            if face_match_score < 0.80:  # Set threshold to 0.80 (80%)
+            if face_match_score == 0:  # If the match score is 0, authentication fails
                 return False, "Face does not match. Please try again."
 
             # Process current face image in the same way as registration
@@ -356,24 +357,26 @@ class HybridCryptoAuth:
             return False, f"Verification failed: {str(e)}"
 
     def compare_faces(self, stored_face, current_face):
-        """Compare faces using template matching"""
+        """Compare faces using DeepFace similarity"""
         try:
-            # Ensure consistent image size
-            stored_face = cv2.resize(stored_face, (256, 256))
-            current_face = cv2.resize(current_face, (256, 256))
-
-            # Convert to grayscale
-            stored_gray = cv2.cvtColor(stored_face, cv2.COLOR_BGR2GRAY)
-            current_gray = cv2.cvtColor(current_face, cv2.COLOR_BGR2GRAY)
-
-            # Calculate template matching score
-            result = cv2.matchTemplate(stored_gray, current_gray, cv2.TM_CCOEFF_NORMED)
-            score = result[0][0]
+            # Save temporary images for comparison
+            stored_temp_path = "stored_temp.jpg"
+            current_temp_path = "current_temp.jpg"
             
-            return score
+            cv2.imwrite(stored_temp_path, stored_face)
+            cv2.imwrite(current_temp_path, current_face)
+            
+            # Compute similarity using DeepFace
+            result = DeepFace.verify(stored_temp_path, current_temp_path, model_name="VGG-Face")
+            similarity_score = result["distance"]
+            
+            # Define threshold (lower distance = more similarity)
+            threshold = 0.3  # Adjust as needed (0.3 is a good match)
+            
+            return 1 - similarity_score if similarity_score < threshold else 0
 
         except Exception as e:
-            print(f"Face comparison error: {str(e)}")
+            print(f"DeepFace comparison error: {str(e)}")
             return 0.0
 
 class AuthUI:
