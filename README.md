@@ -1,8 +1,8 @@
-BioCrypt-Auth
+## BioCrypt-Auth
 
 A blockchain-based authentication system that combines facial recognition, eye biometrics, and password verification for enhanced security.
 
-Features
+## Features
 
 Multi-factor authentication using:
 
@@ -20,12 +20,12 @@ SHA-256 hashing for data integrity
 
 SQLite database for user management
 
-Requirements
+## Requirements
 
 bash
 pip install -r requirements.txt
 
-Installation
+## Installation
 
 Clone the repository
 bash
@@ -40,7 +40,7 @@ Initialize the database
 bash
 python app.py
 
-Usage
+## Usage
 
 Register a new user:
 python
@@ -60,7 +60,7 @@ face_image_path="path/to/face/image.jpg",
 password="secure_password123"
 )
 
-System Architecture
+## System Architecture
 
 Input Processing
 
@@ -88,7 +88,7 @@ Blockchain for encrypted patterns
 
 Secure hash linking between blocks
 
-Contributing
+## Contributing
 
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
 ## License
