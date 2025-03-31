@@ -42,6 +42,15 @@ class HybridCryptoAuth:
         base_model = VGG16(weights='imagenet', include_top=False)
         self.face_model = Model(inputs=base_model.input, 
                               outputs=base_model.get_layer('block5_pool').output)
+        
+        # Add eye detection cascade
+        self.eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+        self.blink_threshold = 50  # Threshold for eye intensity
+        
+        # Add these new variables for blink detection
+        self.last_blink_time = 0
+        self.blink_duration = 3.0  # How long to maintain "blink detected" state (seconds)
+        self.blink_cooldown = 1.0  # Minimum time between blink detections (seconds)
 
     def init_db(self):
         """Initialize the SQLite database"""
@@ -298,9 +307,124 @@ class HybridCryptoAuth:
         except Exception as e:
             raise Exception(f"Registration failed: {str(e)}")
 
-    def verify_user(self, user_id, password, current_face_image):
-        """Verify user authentication with stored image comparison"""
+    def detect_blink(self, frame):
+        """
+        Detect eye blinks using simple OpenCV methods with improved sensitivity
+        """
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
+        
+        eye_intensities = []
+        prev_intensities = getattr(self, 'prev_intensities', [])
+        current_time = time.time()
+        
+        # Check if we're still in the "blink detected" state
+        if hasattr(self, 'last_blink_time'):
+            time_since_blink = current_time - self.last_blink_time
+            if time_since_blink < self.blink_duration:
+                blink_detected = True
+            else:
+                blink_detected = False
+        else:
+            blink_detected = False
+        
+        for (x, y, w, h) in faces:
+            roi_gray = gray[y:y + h, x:x + w]
+            roi_color = frame[y:y + h, x:x + w]
+            
+            eyes = self.eye_cascade.detectMultiScale(
+                roi_gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(30, 30),
+                flags=cv2.CASCADE_SCALE_IMAGE
+            )
+            
+            if len(eyes) >= 2:
+                current_intensities = []
+                for (ex, ey, ew, eh) in eyes:
+                    eye_roi = roi_gray[ey:ey + eh, ex:ex + ew]
+                    
+                    if eye_roi.size > 0:
+                        avg_intensity = np.mean(eye_roi)
+                        current_intensities.append(avg_intensity)
+                        eye_intensities.append(avg_intensity)
+                        
+                        cv2.rectangle(roi_color, (ex, ey), 
+                                    (ex + ew, ey + eh), (0, 255, 0), 2)
+                        
+                        cv2.putText(roi_color, f"Int: {avg_intensity:.1f}", 
+                                  (ex, ey - 10), cv2.FONT_HERSHEY_SIMPLEX, 
+                                  0.5, (0, 255, 0), 1)
+                
+                # Check for new blink only if cooldown period has passed
+                if prev_intensities and current_intensities:
+                    time_since_last_blink = current_time - self.last_blink_time
+                    if time_since_last_blink >= self.blink_cooldown:
+                        intensity_changes = [abs(curr - prev) for curr, prev in zip(current_intensities, prev_intensities)]
+                        avg_change = np.mean(intensity_changes)
+                        
+                        if avg_change > 10:  # Threshold for intensity change
+                            self.last_blink_time = current_time
+                            blink_detected = True
+                
+                # Update previous intensities
+                self.prev_intensities = current_intensities
+                
+                # Display debug information
+                cv2.putText(frame, f"Eyes detected: {len(eyes)}", 
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Show blink status with countdown
+                if blink_detected:
+                    remaining_time = max(0, self.blink_duration - (current_time - self.last_blink_time))
+                    cv2.putText(frame, f"Blink Detected! ({remaining_time:.1f}s)", 
+                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                else:
+                    cv2.putText(frame, "No Blink", 
+                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                
+                if eye_intensities:
+                    curr_avg = np.mean(current_intensities)
+                    cv2.putText(frame, f"Avg Intensity: {curr_avg:.1f}", 
+                               (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    if prev_intensities:
+                        prev_avg = np.mean(prev_intensities)
+                        change = abs(curr_avg - prev_avg)
+                        cv2.putText(frame, f"Change: {change:.1f}", 
+                                   (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        
+                    # Show cooldown status
+                    if not blink_detected:
+                        cooldown_remaining = max(0, self.blink_cooldown - (current_time - self.last_blink_time))
+                        if cooldown_remaining > 0:
+                            cv2.putText(frame, f"Cooldown: {cooldown_remaining:.1f}s", 
+                                       (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        
+        return blink_detected, frame
+
+    def verify_user(self, user_id, password, face_image):
+        """
+        Modified verify_user method with improved blink detection handling
+        """
         try:
+            # Try blink detection multiple times
+            blink_detected = False
+            max_attempts = 50  # Check for 5 seconds (at 10 fps)
+            attempt = 0
+            
+            while not blink_detected and attempt < max_attempts:
+                blink_detected, processed_frame = self.detect_blink(face_image)
+                if blink_detected:
+                    print("Blink detected at attempt:", attempt)
+                    break
+                attempt += 1
+                time.sleep(0.1)  # Wait 100ms between checks
+            
+            if not blink_detected:
+                return False, "No blink detected - please blink naturally and try again"
+            
+            # Continue with existing verification process
             user_data = self.get_user_from_db(user_id)
             if not user_data:
                 return False, "User not found in the database."
@@ -317,7 +441,7 @@ class HybridCryptoAuth:
                 return False, "Could not load stored face image."
 
             # Compare faces using DeepFace similarity
-            face_match_score = self.compare_faces(stored_face, current_face_image)
+            face_match_score = self.compare_faces(stored_face, face_image)
             print(f"Face comparison score: {face_match_score}")
 
             # Always delete temp images, regardless of login success or failure
@@ -334,7 +458,7 @@ class HybridCryptoAuth:
                 return False, "Face does not match. Please try again."
 
             # Process current face image in the same way as registration
-            face_binary = self.process_face_to_binary(current_face_image)
+            face_binary = self.process_face_to_binary(face_image)
             password_binary = self.password_to_binary(password)
 
             # Create merged pattern
@@ -364,7 +488,8 @@ class HybridCryptoAuth:
                 return False, "Error verifying credentials."
 
         except Exception as e:
-            return False, f"Verification failed: {str(e)}"
+            print(f"Verification error: {str(e)}")
+            return False, "Verification failed"
 
     def compare_faces(self, stored_face, current_face):
         """Compare faces using DeepFace similarity"""
@@ -472,18 +597,18 @@ class AuthUI:
                 # Store the current frame
                 self.captured_frame = frame.copy()
                 
-                # Detect faces
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = self.auth_system.face_cascade.detectMultiScale(gray, 1.3, 5)
+                # Detect blinks and get processed frame
+                blink_detected, processed_frame = self.auth_system.detect_blink(frame)
                 
-                # Draw rectangle around faces
-                for (x, y, w, h) in faces:
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+                if blink_detected:
+                    # Visual feedback for blink detection
+                    cv2.putText(processed_frame, "Blink Detected!", (10, 60),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
                 # Convert frame to PhotoImage
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame = cv2.resize(frame, (320, 240))
-                photo = ImageTk.PhotoImage(image=Image.fromarray(frame))
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+                processed_frame = cv2.resize(processed_frame, (320, 240))
+                photo = ImageTk.PhotoImage(image=Image.fromarray(processed_frame))
                 
                 camera_label.configure(image=photo)
                 camera_label.image = photo
